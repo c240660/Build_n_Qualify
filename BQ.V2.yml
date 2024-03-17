@@ -80,12 +80,12 @@
          state: absent
          path: /var/log/pcp/pmlogger/{{ ansible_fqdn }}
       when: fqdn.stat.exists
-#    - name: Adding sapsys in centrify group ignore, if it exists
-#      shell: grep -c sapsys /etc/group && ! grep -c sapsys /etc/centrifydc/group.ignore && echo sapsys >> /etc/centrifydc/group.ignore
-#      ignore_errors: yes
+    - name: Adding sapsys in centrify group ignore, if it exists
+      shell: grep -c sapsys /etc/group && ! grep -c sapsys /etc/centrifydc/group.ignore && echo sapsys >> /etc/centrifydc/group.ignore
+      ignore_errors: yes
 
-#    - name: Adding local user in centrify user ignore
-#      shell: "awk -F: '{print $1}' /etc/passwd > /etc/centrifydc/user.ignore && sleep 120 && adreload"
+    - name: Adding local user in centrify user ignore
+      shell: "awk -F: '{print $1}' /etc/passwd > /etc/centrifydc/user.ignore && sleep 120 && adreload"
     - name: Install Packages
       yum:
         name: "{{ item }}"
