@@ -15,7 +15,7 @@
 
     - name: Do not run the playbook if 'SAP' or 'SAPHANA' Subscription is not found
       fail:
-        msg: "The subscription is not for 'SAP' or 'SAPHANA'. Aborting playbook execution."
+        msg: "The subscription is not for 'SAP_App' or 'SAPHANA'. Aborting playbook execution."
       when: not (is_app or is_hana)
 
     - name: If subscription is one of APP or HANA Solutions
@@ -43,6 +43,7 @@
         line: GRUB_CMDLINE_LINUX="processor.max_cstate=1 intel_idle.max_cstate=1 selinux=0 clocksource=tsc transparent_hugepage=never tsx=on"
       notify:
         - Update GRUB configuration
+        - dracut to regenerate initramfs
       when: is_hana
     - name: Add kernel parameters to GRUB configuration
       lineinfile:
@@ -55,35 +56,10 @@
       systemd:
          name: NetworkManager
          state: stopped
-         enabled: no 
-    - name: Check if it exists
-      stat:
-         path: /var/log/pcp/pmlogger/{{ ansible_hostname }}
-      register: dir
-    - name: Stop and disable pmlogger service
-      systemd:
-         name: pmlogger
-         state: stopped
          enabled: no
-      when: dir.stat.exists
-    - name: Remove existing logs
-      file:
-         state: absent
-         path: /var/log/pcp/pmlogger/{{ ansible_hostname }}
-      when: dir.stat.exists
-    - name: Check if FQDN file exists
-      stat:
-         path: /var/log/pcp/pmlogger/{{ ansible_fqdn }}
-      register: fqdn
-    - name: Remove if file with FQDN exists
-      file:
-         state: absent
-         path: /var/log/pcp/pmlogger/{{ ansible_fqdn }}
-      when: fqdn.stat.exists
     - name: Adding sapsys in centrify group ignore, if it exists
       shell: grep -c sapsys /etc/group && ! grep -c sapsys /etc/centrifydc/group.ignore && echo sapsys >> /etc/centrifydc/group.ignore
       ignore_errors: yes
-
     - name: Adding local user in centrify user ignore
       shell: "awk -F: '{print $1}' /etc/passwd > /etc/centrifydc/user.ignore && sleep 120 && adreload"
     - name: Install Packages
@@ -122,11 +98,14 @@
         - openssl.x86_64
         - zlib.x86_64
         - libuuid.i686
+        - jq
+        - dos2unix
+        - yum-utils
     - name: Install GCC Packages
       yum:
         name: "{{ item }}"
       with_items:
-        - compat-sap-c++-9
+        - compat-sap-c++-*
         - libatomic
       when: is_hana
     - name:  Create symlinks for hana servers
@@ -201,13 +180,6 @@
       service:
         name: uuidd
         enabled: yes
-    - name: Create or update /tmp mount point with 75% size
-      mount:
-        name: /tmp
-        src: tmpfs
-        fstype: tmpfs
-        opts: size=75%
-        state: mounted
     - name: Run yum command to install tuned profiles in APP
       yum:
         name: tuned-profiles-sap
@@ -230,7 +202,6 @@
       blockinfile:
          path: /etc/security/limits.d/99-sap.conf
          backup: yes
-         insertbefore: "# End of file"
          block: |
            @sapsys hard    nproc   unlimited
            @sapsys soft    nproc   unlimited
@@ -247,6 +218,18 @@
     - name: Apply tuned profile for SAP NetWeaver
       command: tuned-adm profile sap-hana
       when: is_hana
+    - name: Create file /etc/security/limits.d/99-sap.conf  (SAP Note 2772999 & 2777782)
+      blockinfile:
+         path: /etc/security/limits.d/99-sap.conf
+         backup: yes
+         block: |
+           @sapsys hard    nproc   unlimited
+           @sapsys soft    nproc   unlimited
+           @sapsys hard    nofile  1048576
+           @sapsys soft    nofile  1048576'
+           *       hard    core    0
+           *       soft    core    0
+      when: is_hana
     - name: Stop and disable services
       service:
         name: "{{ item }}"
@@ -259,32 +242,19 @@
         - numad
       ignore_errors: true # numad is not there normaly
       when: is_hana
-    - name: Create file /etc/security/limits.d/99-sap.conf  (SAP Note 2772999 & 2777782)
-      blockinfile:
-         path: /etc/security/limits.d/99-sap.conf
-         backup: yes
-         insertbefore: "# End of file"
-         block: |
-           @sapsys hard    nproc   unlimited
-           @sapsys soft    nproc   unlimited
-           @sapsys hard    nofile  1048576
-           @sapsys soft    nofile  1048576'
-           *       hard    core    0
-           *       soft    core    0
-      when: is_hana
     - name: Create boot.local file
       copy:
          content: "echo 'echo 0 > /sys/kernel/mm/ksm/run' > /etc/init.d/boot.local"
          dest: /etc/init.d/boot.local
          mode: '0755'
-    - name: Create file if it doesn't exist
+      when: is_hana
+    - name: Create sap_hana.conf file if it doesn't exist
       file:
         path: /etc/sysctl.d/sap_hana.conf
         state: touch
     - name: Create file /etc/sysctl.d/sap_hana.conf (SAP Note 2382421)
       blockinfile:
          path: /etc/sysctl.d/sap_hana.conf
-         insertbefore: "# End of file"
          block: |
            net.core.somaxconn=4096
            net.ipv4.tcp_max_syn_backlog=8192
@@ -309,3 +279,5 @@
         enablerepo: "rhel*"
     - name: Update GRUB configuration
       command: "grub2-mkconfig -o /boot/grub2/grub.cfg"
+    - name: dracut to regenerate initramfs
+      command: dracut -f 
