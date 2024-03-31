@@ -1,0 +1,10 @@
+/var/spool/mail/root {
+    compress
+    missingok
+    rotate=2
+    size=45M
+    su root root
+    create 600 root root
+    copytruncate
+    sharedscripts
+}
