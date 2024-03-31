@@ -39,6 +39,23 @@
          - { src: '/etc/services', dest: '/etc/services.preBnQ' }
          - { src: '/etc/hosts', dest: '/etc/hosts.preBnQ' }
          - { src: '/etc/default/grub', dest: '/etc/default/grub.preBnQ' }
+    - name: Backup SELinux configuration
+      copy:
+        src: /etc/selinux/config
+        dest: /etc/selinux/config.pre_build_nqualify
+        backup: yes
+        force: yes
+    - name: Disable SELinux in configuration file
+      lineinfile:
+        path: /etc/selinux/config
+        regexp: '^(SELINUX=enforcing|SELINUX=permissive)'
+        line: 'SELINUX=disabled'
+    - name: Remove rhgb quiet from /etc/default/grub
+      lineinfile:
+        path: /etc/default/grub
+        regexp: '^GRUB_CMDLINE_LINUX='
+        line: 'GRUB_CMDLINE_LINUX="rhgb quiet"'
+        state: absent
     - name: Add kernel parameters to GRUB configuration
       lineinfile:
         path: /etc/default/grub
@@ -52,18 +69,19 @@
         path: /etc/default/grub
         line: GRUB_CMDLINE_LINUX="processor.max_cstate=1 intel_idle.max_cstate=1 selinux=0 clocksource=tsc" 
       notify:
-        - Update GRUB configuration
+        - update-grub
+        - dracut
       when: is_app
     - name:  Stop NetworkManager service
       systemd:
          name: NetworkManager
          state: stopped
          enabled: no
-#   - name: Adding sapsys in centrify group ignore, if it exists
-#      shell: grep -c sapsys /etc/group && ! grep -c sapsys /etc/centrifydc/group.ignore && echo sapsys >> /etc/centrifydc/group.ignore
-#      ignore_errors: yes
-#    - name: Adding local user in centrify user ignore
-#      shell: "awk -F: '{print $1}' /etc/passwd > /etc/centrifydc/user.ignore && sleep 120 && adreload"
+    - name: Adding sapsys in centrify group ignore, if it exists
+      shell: grep -c sapsys /etc/group && ! grep -c sapsys /etc/centrifydc/group.ignore && echo sapsys >> /etc/centrifydc/group.ignore
+      ignore_errors: yes
+    - name: Adding local user in centrify user ignore
+      shell: "awk -F: '{print $1}' /etc/passwd > /etc/centrifydc/user.ignore && sleep 120 && adreload"
     - name: Install Packages
       yum:
         name: "{{ item }}"
@@ -129,10 +147,8 @@
       copy:
          src: files/ignore-messages.conf
          dest: /etc/rsyslog.d/ignore-messages.conf
-    - name: restart rsyslog service
-      systemd:
-         state: restarted
-         name: rsyslog.service
+      notify:
+        - restart-rsyslogd
     - name: Verify /usr/local/bin ownership
       file:
          path: /usr/local/bin
@@ -305,3 +321,7 @@
       command: "grub2-mkconfig -o /boot/grub2/grub.cfg"
     - name: dracut
       command: dracut -f 
+    - name: restart-rsyslogd
+      systemd: 
+       state: restarted
+       name: rsyslog
