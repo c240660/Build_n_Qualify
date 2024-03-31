@@ -4,10 +4,12 @@
   gather_facts: yes
   tasks:
     - name: check Subscription
-      command: subscription-manager identity
+      command: "subscription-manager identity"
       register: subscription_identity
       changed_when: false
-
+    - name: Debug subscription_identity
+      debug:
+        var: subscription_identity
     - name: Parse subscription-manager output
       set_fact:
         is_app: "{{ 'SAP_' in subscription_identity.stdout   }}"
@@ -42,13 +44,13 @@
         path: /etc/default/grub
         line: GRUB_CMDLINE_LINUX="processor.max_cstate=1 intel_idle.max_cstate=1 selinux=0 clocksource=tsc transparent_hugepage=never tsx=on"
       notify:
-        - Update GRUB configuration
-        - dracut to regenerate initramfs
+        - update-grub
+        - dracut
       when: is_hana
     - name: Add kernel parameters to GRUB configuration
       lineinfile:
         path: /etc/default/grub
-        line: GRUB_CMDLINE_LINUX_DEFAULT="processor.max_cstate=1 intel_idle.max_cstate=1 selinux=0 clocksource=tsc" 
+        line: GRUB_CMDLINE_LINUX="processor.max_cstate=1 intel_idle.max_cstate=1 selinux=0 clocksource=tsc" 
       notify:
         - Update GRUB configuration
       when: is_app
@@ -57,11 +59,11 @@
          name: NetworkManager
          state: stopped
          enabled: no
-    - name: Adding sapsys in centrify group ignore, if it exists
-      shell: grep -c sapsys /etc/group && ! grep -c sapsys /etc/centrifydc/group.ignore && echo sapsys >> /etc/centrifydc/group.ignore
-      ignore_errors: yes
-    - name: Adding local user in centrify user ignore
-      shell: "awk -F: '{print $1}' /etc/passwd > /etc/centrifydc/user.ignore && sleep 120 && adreload"
+#   - name: Adding sapsys in centrify group ignore, if it exists
+#      shell: grep -c sapsys /etc/group && ! grep -c sapsys /etc/centrifydc/group.ignore && echo sapsys >> /etc/centrifydc/group.ignore
+#      ignore_errors: yes
+#    - name: Adding local user in centrify user ignore
+#      shell: "awk -F: '{print $1}' /etc/passwd > /etc/centrifydc/user.ignore && sleep 120 && adreload"
     - name: Install Packages
       yum:
         name: "{{ item }}"
@@ -206,8 +208,26 @@
            @sapsys hard    nproc   unlimited
            @sapsys soft    nproc   unlimited
            @sapsys hard    nofile  1048576
-           @sapsys soft    nofile  1048576' 
+           @sapsys soft    nofile  1048576 
       when: is_app
+    - name: Create file zlilly.conf if it doesn't exist
+      file:
+        path: /etc/sysctl.d/zLilly.conf
+        state: touch
+    - name: Update file /etc/sysctl.d/zLilly.conf - # Lilly SAP settings for RHEL8/RHEL9
+      blockinfile:
+         path: /etc/sysctl.d/zLilly.conf 
+         backup: yes
+         block: |
+          net.ipv4.tcp_syn_retries = 8
+          kernel.shmmni = 32768
+          net.ipv4.tcp_rmem = 4096 16384 6291456
+          net.ipv4.tcp_wmem = 4096 16384 6291456
+          net.core.rmem_max = 6291456
+          net.core.wmem_max = 6291456
+          kernel.sem = 32000 1024000000 500 3276
+    - name: Create and update sap.conf
+      shell: echo 'vm.max_map_count=2147483647' > /etc/sysctl.d/sap.conf
     - name: Run yum command to install tuned profiles in HANA
       yum:
         name: tuned-profiles-sap-hana
@@ -226,7 +246,7 @@
            @sapsys hard    nproc   unlimited
            @sapsys soft    nproc   unlimited
            @sapsys hard    nofile  1048576
-           @sapsys soft    nofile  1048576'
+           @sapsys soft    nofile  1048576
            *       hard    core    0
            *       soft    core    0
       when: is_hana
@@ -277,7 +297,11 @@
         state: present
         disablerepo: "*"
         enablerepo: "rhel*"
-    - name: Update GRUB configuration
+
+
+##################  Handlers  ###################
+  handlers:
+    - name: update-grub
       command: "grub2-mkconfig -o /boot/grub2/grub.cfg"
-    - name: dracut to regenerate initramfs
+    - name: dracut
       command: dracut -f 
