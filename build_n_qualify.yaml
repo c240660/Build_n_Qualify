@@ -7,7 +7,8 @@
       command: "subscription-manager identity"
       register: subscription_identity
       changed_when: false
-    - name: Debug subscription_identity
+      
+    - name: Debug subscription_identity and register the variables
       debug:
         var: subscription_identity
     - name: Parse subscription-manager output
@@ -31,6 +32,7 @@
           debug:
             msg: host is a HANA/Solutions server
           when: is_hana
+
     - name: Backup files with extension preB&Q
       copy: src={{ item.src }} dest={{ item.dest }} remote_src=yes force=no
       with_items:
@@ -39,50 +41,48 @@
          - { src: '/etc/services', dest: '/etc/services.preBnQ' }
          - { src: '/etc/hosts', dest: '/etc/hosts.preBnQ' }
          - { src: '/etc/default/grub', dest: '/etc/default/grub.preBnQ' }
-    - name: Backup SELinux configuration
-      copy:
-        src: /etc/selinux/config
-        dest: /etc/selinux/config.pre_build_nqualify
-        backup: yes
-        force: yes
+         - { src: '/etc/selinux/config ', dest: '/etc/selinux/config.preBnQ' }
+
     - name: Disable SELinux in configuration file
       lineinfile:
         path: /etc/selinux/config
         regexp: '^(SELINUX=enforcing|SELINUX=permissive)'
         line: 'SELINUX=disabled'
-    - name: Remove rhgb quiet from /etc/default/grub
+
+    - name: Add kernel parameters to GRUB configuration updating GRUB_CMDLINE_LINUX Line for HANA servers
       lineinfile:
         path: /etc/default/grub
         regexp: '^GRUB_CMDLINE_LINUX='
-        line: 'GRUB_CMDLINE_LINUX="rhgb quiet"'
-        state: absent
-    - name: Add kernel parameters to GRUB configuration
-      lineinfile:
-        path: /etc/default/grub
         line: GRUB_CMDLINE_LINUX="processor.max_cstate=1 intel_idle.max_cstate=1 selinux=0 clocksource=tsc transparent_hugepage=never tsx=on"
       notify:
         - update-grub
         - dracut
       when: is_hana
-    - name: Add kernel parameters to GRUB configuration
+
+    - name: Add kernel parameters to GRUB configuration updating GRUB_CMDLINE_LINUX Line for App Servers 
       lineinfile:
         path: /etc/default/grub
+        regexp: '^GRUB_CMDLINE_LINUX='
         line: GRUB_CMDLINE_LINUX="processor.max_cstate=1 intel_idle.max_cstate=1 selinux=0 clocksource=tsc" 
       notify:
         - update-grub
         - dracut
       when: is_app
+
     - name:  Stop NetworkManager service
       systemd:
          name: NetworkManager
          state: stopped
          enabled: no
+
     - name: Adding sapsys in centrify group ignore, if it exists
       shell: grep -c sapsys /etc/group && ! grep -c sapsys /etc/centrifydc/group.ignore && echo sapsys >> /etc/centrifydc/group.ignore
       ignore_errors: yes
+
     - name: Adding local user in centrify user ignore
       shell: "awk -F: '{print $1}' /etc/passwd > /etc/centrifydc/user.ignore && sleep 120 && adreload"
-    - name: Install Packages
+
+    - name: Install Required Packages
       yum:
         name: "{{ item }}"
       with_items:
@@ -121,6 +121,7 @@
         - jq
         - dos2unix
         - yum-utils
+
     - name: Install GCC Packages
       yum:
         name: "{{ item }}"
@@ -128,6 +129,7 @@
         - compat-sap-c++-*
         - libatomic
       when: is_hana
+
     - name:  Create symlinks for hana servers
       file:
          src: "{{ item.src }}"
@@ -138,23 +140,27 @@
          - { src: /usr/lib64/libssl.so.10, dest: /usr/lib64/libssl.so.1.0.1 }
          - { src: /usr/lib64/libcrypto.so.10, dest: /usr/lib64/libcrypto.so.1.0.1 }
       when: is_hana    
+
     - name:  Set X11 forwarding to yes
       replace:
          path: /etc/ssh/sshd_config
          regexp:  '(^X11Forwarding)(.*)$'
          replace: X11Forwarding yes
-    - name: Suppress spam on RHEL8 servers
+
+    - name: Suppress spam messages on RHEL8 servers
       copy:
          src: files/ignore-messages.conf
          dest: /etc/rsyslog.d/ignore-messages.conf
       notify:
         - restart-rsyslogd
+
     - name: Verify /usr/local/bin ownership
       file:
          path: /usr/local/bin
          state: directory
          owner: root
          group: root
+
     - name: Copy new bscript
       copy:
          src: /net/gutstools/guts_dev/distr/scripts/bscript_ng
@@ -163,17 +169,21 @@
          group: sys
          mode: '0700'
          backup: yes
+
     - name: Set selinux labels
       shell: touch /.autorelabel
+
     - name: add root mail to be under logrotate control
       copy:
          src: files/mail
          dest: /etc/logrotate.d/
          owner: root
          group: root
-    - name: To set hostname as short one
+
+    - name: set hostname as short one
       shell: echo "{{ ansible_hostname }}" > /etc/hostname
-    - name: Task 26 Add Network Delay
+
+    - name: Add Network Delay
       lineinfile:
          path: /etc/sysconfig/network
          line: NETWORKDELAY=30
@@ -183,6 +193,7 @@
         name: firewalld
         state: stopped
       ignore_errors: true  # Ignore errors if the firewall service is already stopped
+
     - name: Disable firewall service
       service:
         name: firewalld
@@ -198,6 +209,7 @@
       service:
         name: uuidd
         enabled: yes
+
     - name: Run yum command to install tuned profiles in APP
       yum:
         name: tuned-profiles-sap
@@ -205,17 +217,21 @@
         disablerepo: "*"
         enablerepo: "rhel*"
       when: is_app
+
     - name: Apply tuned profile for SAP NetWeaver
       command: tuned-adm profile sap-netweaver
       when: is_app
+
     - name: Create directory if it doesn't exists
       file:
         path: /etc/security/limits.d
         state: directory
+
     - name: Create file if it doesn't exist
       file:
         path: /etc/security/limits.d/99-sap.conf
         state: touch
+
     - name: Create file /etc/security/limits.d/99-sap.conf for App servers
       blockinfile:
          path: /etc/security/limits.d/99-sap.conf
@@ -226,10 +242,12 @@
            @sapsys hard    nofile  1048576
            @sapsys soft    nofile  1048576 
       when: is_app
+
     - name: Create file zlilly.conf if it doesn't exist
       file:
         path: /etc/sysctl.d/zLilly.conf
         state: touch
+
     - name: Update file /etc/sysctl.d/zLilly.conf - # Lilly SAP settings for RHEL8/RHEL9
       blockinfile:
          path: /etc/sysctl.d/zLilly.conf 
@@ -242,6 +260,7 @@
           net.core.rmem_max = 6291456
           net.core.wmem_max = 6291456
           kernel.sem = 32000 1024000000 500 3276
+
     - name: Create and update sap.conf
       shell: echo 'vm.max_map_count=2147483647' > /etc/sysctl.d/sap.conf
     - name: Run yum command to install tuned profiles in HANA
@@ -251,9 +270,11 @@
         disablerepo: "*"
         enablerepo: "rhel*"
       when: is_hana
+
     - name: Apply tuned profile for SAP NetWeaver
       command: tuned-adm profile sap-hana
       when: is_hana
+
     - name: Create file /etc/security/limits.d/99-sap.conf  (SAP Note 2772999 & 2777782)
       blockinfile:
          path: /etc/security/limits.d/99-sap.conf
@@ -266,6 +287,7 @@
            *       hard    core    0
            *       soft    core    0
       when: is_hana
+
     - name: Stop and disable services
       service:
         name: "{{ item }}"
@@ -277,6 +299,7 @@
         - kdump
         - numad
       ignore_errors: true # numad is not there normaly
+
       when: is_hana
     - name: Create boot.local file
       copy:
@@ -284,10 +307,12 @@
          dest: /etc/init.d/boot.local
          mode: '0755'
       when: is_hana
+
     - name: Create sap_hana.conf file if it doesn't exist
       file:
         path: /etc/sysctl.d/sap_hana.conf
         state: touch
+
     - name: Create file /etc/sysctl.d/sap_hana.conf (SAP Note 2382421)
       blockinfile:
          path: /etc/sysctl.d/sap_hana.conf
@@ -299,6 +324,7 @@
            net.core.wmem_max=6291456
            net.core.rmem_max=6291456
       when: is_hana
+      
     - name: Install packages
       yum:
         name:
