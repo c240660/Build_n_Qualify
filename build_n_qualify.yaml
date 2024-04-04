@@ -41,7 +41,7 @@
          - { src: '/etc/services', dest: '/etc/services.preBnQ' }
          - { src: '/etc/hosts', dest: '/etc/hosts.preBnQ' }
          - { src: '/etc/default/grub', dest: '/etc/default/grub.preBnQ' }
-         - { src: '/etc/selinux/config ', dest: '/etc/selinux/config.preBnQ' }
+         - { src: '/etc/selinux/config', dest: '/etc/selinux/config.preBnQ' }
 
     - name: Disable SELinux in configuration file
       lineinfile:
