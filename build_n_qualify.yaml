@@ -2,6 +2,11 @@
 - name: Check subscription-manager identity for 'SAP' or 'SAPHANA'
   hosts: all
   gather_facts: yes
+  vars_prompt:
+    - name: CHG_NUMBER
+      prompt: "Enter CHG NUMBER: "
+      private: no
+
   tasks:
     - name: check Subscription
       command: "subscription-manager identity"
@@ -11,6 +16,7 @@
     - name: Debug subscription_identity and register the variables
       debug:
         var: subscription_identity
+
     - name: Parse subscription-manager output
       set_fact:
         is_app: "{{ 'SAP_' in subscription_identity.stdout   }}"
@@ -33,15 +39,21 @@
             msg: host is a HANA/Solutions server
           when: is_hana
 
+    - name: Check if backup file exists for grub
+      stat:
+        path: /etc/default/grub.preBnQ{{ CHG_NUMBER }}
+      register: backup_file
+ 
     - name: Backup files with extension preB&Q
       copy: src={{ item.src }} dest={{ item.dest }} remote_src=yes force=no
       with_items:
-         - { src: '/etc/fstab', dest: '/etc/fstab.preBnQ' }
-         - { src: '/etc/security/limits.conf', dest: '/etc/security/limits.conf.preBnQ' }
-         - { src: '/etc/services', dest: '/etc/services.preBnQ' }
-         - { src: '/etc/hosts', dest: '/etc/hosts.preBnQ' }
-         - { src: '/etc/default/grub', dest: '/etc/default/grub.preBnQ' }
-         - { src: '/etc/selinux/config', dest: '/etc/selinux/config.preBnQ' }
+         - { src: '/etc/fstab', dest: '/etc/fstab.preBnQ{{ CHG_NUMBER }}' }
+         - { src: '/etc/security/limits.conf', dest: '/etc/security/limits.conf.preBnQ{{ CHG_NUMBER }}' }
+         - { src: '/etc/services', dest: '/etc/services.preBnQ{{ CHG_NUMBER }}' }
+         - { src: '/etc/hosts', dest: '/etc/hosts.preBnQ{{ CHG_NUMBER }}' }
+         - { src: '/etc/default/grub', dest: '/etc/default/grub.preBnQ{{ CHG_NUMBER }}' }
+         - { src: '/etc/selinux/config', dest: '/etc/selinux/config.preBnQ{{ CHG_NUMBER }}' }
+      when: not backup_file.stat.exists
 
     - name: Disable SELinux in configuration file
       lineinfile:
@@ -49,32 +61,44 @@
         regexp: '^(SELINUX=enforcing|SELINUX=permissive)'
         line: 'SELINUX=disabled'
 
-    - name: Add kernel parameters to GRUB configuration updating GRUB_CMDLINE_LINUX Line for HANA servers
-      lineinfile:
-        path: /etc/default/grub
-        regexp: '^GRUB_CMDLINE_LINUX='
-        line: GRUB_CMDLINE_LINUX="processor.max_cstate=1 intel_idle.max_cstate=1 selinux=0 clocksource=tsc transparent_hugepage=never tsx=on"
-      notify:
-        - update-grub
-        - dracut
-      when: is_hana
+    - name: Read the contents of /etc/default/grub
+      shell: cat /etc/default/grub
+      register: grub_file
 
-    - name: Add kernel parameters to GRUB configuration updating GRUB_CMDLINE_LINUX Line for App Servers 
+    - name: Define additional grub parameters for App servers
+      set_fact: 
+        additional_params: "processor.max_cstate=1 intel_idle.max_cstate=1 selinux=0 clocksource=tsc"
+      when: is_app
+
+    - name: Define additional grub parameters for Hana servers
+      set_fact: 
+        additional_params: "processor.max_cstate=1 intel_idle.max_cstate=1 selinux=0 clocksource=tsc transparent_hugepage=never tsx=on"
+      when: is_hana 
+
+    - name: Remove double quotes and GRUB_CMDLINE_LINUX= prefix from existing line
+      set_fact: 
+        cleaned_line: "{{ grub_file.stdout_lines | select('match', '^GRUB_CMDLINE_LINUX=.*$') | first | regex_replace('GRUB_CMDLINE_LINUX=', '') | regex_replace('\"', '') }}"
+
+    - name: Append additional parameters to GRUB_CMDLINE_LINUX line
       lineinfile:
         path: /etc/default/grub
-        regexp: '^GRUB_CMDLINE_LINUX='
-        line: GRUB_CMDLINE_LINUX="processor.max_cstate=1 intel_idle.max_cstate=1 selinux=0 clocksource=tsc" 
+        regexp: '^GRUB_CMDLINE_LINUX=.*$'
+        line: 'GRUB_CMDLINE_LINUX="{{ cleaned_line }} {{ additional_params }}"'
+        state: present
+      when: not backup_file.stat.exists
+      tags:
+        - exclude_grub_update
+
       notify:
         - update-grub
-        - dracut
-      when: is_app
+        - dracut      
 
     - name:  Stop NetworkManager service
       systemd:
          name: NetworkManager
          state: stopped
          enabled: no
-
+         
     - name: Adding sapsys in centrify group ignore, if it exists
       shell: grep -c sapsys /etc/group && ! grep -c sapsys /etc/centrifydc/group.ignore && echo sapsys >> /etc/centrifydc/group.ignore
       ignore_errors: yes
@@ -82,7 +106,7 @@
     - name: Adding local user in centrify user ignore
       shell: "awk -F: '{print $1}' /etc/passwd > /etc/centrifydc/user.ignore && sleep 120 && adreload"
 
-    - name: Install Required Packages
+    - name: Install Packages
       yum:
         name: "{{ item }}"
       with_items:
@@ -139,15 +163,15 @@
       with_items:
          - { src: /usr/lib64/libssl.so.10, dest: /usr/lib64/libssl.so.1.0.1 }
          - { src: /usr/lib64/libcrypto.so.10, dest: /usr/lib64/libcrypto.so.1.0.1 }
-      when: is_hana    
-
+      when: is_hana
+    
     - name:  Set X11 forwarding to yes
       replace:
          path: /etc/ssh/sshd_config
          regexp:  '(^X11Forwarding)(.*)$'
          replace: X11Forwarding yes
 
-    - name: Suppress spam messages on RHEL8 servers
+    - name: Suppress spam on RHEL8 servers
       copy:
          src: files/ignore-messages.conf
          dest: /etc/rsyslog.d/ignore-messages.conf
@@ -180,10 +204,10 @@
          owner: root
          group: root
 
-    - name: set hostname as short one
+    - name: To set hostname as short one
       shell: echo "{{ ansible_hostname }}" > /etc/hostname
 
-    - name: Add Network Delay
+    - name:  Add Network Delay
       lineinfile:
          path: /etc/sysconfig/network
          line: NETWORKDELAY=30
@@ -263,6 +287,7 @@
 
     - name: Create and update sap.conf
       shell: echo 'vm.max_map_count=2147483647' > /etc/sysctl.d/sap.conf
+
     - name: Run yum command to install tuned profiles in HANA
       yum:
         name: tuned-profiles-sap-hana
@@ -299,8 +324,8 @@
         - kdump
         - numad
       ignore_errors: true # numad is not there normaly
-
       when: is_hana
+
     - name: Create boot.local file
       copy:
          content: "echo 'echo 0 > /sys/kernel/mm/ksm/run' > /etc/init.d/boot.local"
@@ -324,7 +349,7 @@
            net.core.wmem_max=6291456
            net.core.rmem_max=6291456
       when: is_hana
-      
+
     - name: Install packages
       yum:
         name:
