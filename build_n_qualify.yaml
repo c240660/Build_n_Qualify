@@ -92,12 +92,11 @@
       notify:
         - update-grub
         - dracut      
-
-    - name:  Stop NetworkManager service
-      systemd:
-         name: NetworkManager
-         state: stopped
-         enabled: no
+#    - name:  Stop NetworkManager service
+#      systemd:
+#         name: NetworkManager
+#         state: stopped
+#         enabled: no
          
     - name: Adding sapsys in centrify group ignore, if it exists
       shell: grep -c sapsys /etc/group && ! grep -c sapsys /etc/centrifydc/group.ignore && echo sapsys >> /etc/centrifydc/group.ignore
@@ -145,6 +144,7 @@
         - jq
         - dos2unix
         - yum-utils
+      ignore_errors: true
 
     - name: Install GCC Packages
       yum:
