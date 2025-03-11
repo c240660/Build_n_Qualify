@@ -1,7 +1,7 @@
 # SAP build and qualify
 # Build and Qualify code  for SAP-App/Netweaver and SAPHANA
 
-# This is the updated code for SAP_B&Q for SAP App and SAPHANA Solutions servers
+# This is the updated code for SAP_B&Q for SAP App and SAPHANA Solutions servers for RHEL9
 
 Please Note - Make sure, you have "ignore-messages.conf" and "mail" fileis under the "CWD/files" 
 
