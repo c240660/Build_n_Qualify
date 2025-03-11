@@ -12,7 +12,7 @@
       command: "subscription-manager identity"
       register: subscription_identity
       changed_when: false
-      
+
     - name: Debug subscription_identity and register the variables
       debug:
         var: subscription_identity
@@ -39,11 +39,65 @@
             msg: host is a HANA/Solutions server
           when: is_hana
 
+    - name: Gather system facts
+      setup:
+
+    - name: Extract full OS version from redhat-release file
+      set_fact:
+        os_version: "{{ ansible_facts.distribution_version }}"
+
+    - name: Extract OS major version
+      set_fact:
+        os_major_version: "{{ ansible_facts.distribution_version | regex_search('^([0-9]+)') }}"
+
+    - name: Extract OS minor version
+      set_fact:
+        os_minor_version: "{{ ansible_facts.distribution_version | regex_search('^[0-9]+\\.([0-9]+)') }}"
+
+    - name: Display OS version information
+      debug:
+        msg: "RHEL {{ os_version }} / Major version: {{ os_major_version }} / Minor version: {{ os_minor_version }}"
+
+    - name: Check if OS major version is greater than 8 and if 'set enable-bracketed-paste off' is not present
+      block:
+        - name: Check if 'set enable-bracketed-paste off' is in /etc/inputrc
+          command: "grep -c 'set enable-bracketed-paste off' /etc/inputrc"
+          register: bracketed_paste_status
+          changed_when: false
+          ignore_errors: true
+        - name: bracketed paste
+          block:
+            - name: Backup the /etc/inputrc file
+              copy:
+                src: /etc/inputrc
+                dest: /etc/inputrc.preBnQ
+                backup: no
+                mode: '0644'
+
+            - name: Remove 'set enable-bracketed-paste off' line if exists
+              lineinfile:
+                path: /etc/inputrc
+                regexp: '^set enable-bracketed-paste off'
+                state: absent
+
+            - name: Add 'set enable-bracketed-paste off' to /etc/inputrc
+              lineinfile:
+                path: /etc/inputrc
+                line: 'set enable-bracketed-paste off'
+                create: yes
+
+            - name: Log the action to a file
+              lineinfile:
+                path: /var/log/disable_bracketed_paste.log
+                line: "Disabling bracketed paste in /etc/inputrc"
+                create: yes
+          when: os_major_version | int > 8 and bracketed_paste_status.stdout | int == 0
+
     - name: Check if backup file exists for grub
       stat:
         path: /etc/default/grub.preBnQ{{ CHG_NUMBER }}
       register: backup_file
- 
+
     - name: Backup files with extension preB&Q
       copy: src={{ item.src }} dest={{ item.dest }} remote_src=yes force=no
       with_items:
@@ -58,47 +112,169 @@
     - name: Disable SELinux in configuration file
       lineinfile:
         path: /etc/selinux/config
-        regexp: '^(SELINUX=enforcing|SELINUX=permissive)'
+        regexp: '^SELINUX='
         line: 'SELINUX=disabled'
-
-    - name: Read the contents of /etc/default/grub
-      shell: cat /etc/default/grub
-      register: grub_file
+        backup: yes
 
     - name: Define additional grub parameters for App servers
-      set_fact: 
+      set_fact:
         additional_params: "processor.max_cstate=1 intel_idle.max_cstate=1 selinux=0 clocksource=tsc"
       when: is_app
 
-    - name: Define additional grub parameters for Hana servers
-      set_fact: 
-        additional_params: "processor.max_cstate=1 intel_idle.max_cstate=1 selinux=0 clocksource=tsc transparent_hugepage=never tsx=on"
-      when: is_hana 
+    - name: Capture the original GRUB configuration
+      command: grubby --info=DEFAULT
+      register: grubby_orig
+      changed_when: false
 
-    - name: Remove double quotes and GRUB_CMDLINE_LINUX= prefix from existing line
-      set_fact: 
-        cleaned_line: "{{ grub_file.stdout_lines | select('match', '^GRUB_CMDLINE_LINUX=.*$') | first | regex_replace('GRUB_CMDLINE_LINUX=', '') | regex_replace('\"', '') }}"
+    - name: Save original GRUB info to a temporary file
+      copy:
+        content: "{{ grubby_orig.stdout }}"
+        dest: /tmp/grubby.orig
+        mode: '0644'
 
-    - name: Append additional parameters to GRUB_CMDLINE_LINUX line
+    - name: Remove 'rhgb' kernel argument
+      command: grubby --remove-args="rhgb" --update-kernel=ALL
+      register: remove_rhgb
+
+    - name: Remove 'quiet' kernel argument
+      command: grubby --remove-args="quiet" --update-kernel=ALL
+      register: remove_quiet
+
+    - name: Add common kernel parameters to all servers
+      loop:
+        - processor.max_cstate=1
+        - intel_idle.max_cstate=1
+        - selinux=0
+        - clocksource=tsc
+      command: grubby --args="{{ item }}" --update-kernel=ALL
+      loop_control:
+        label: "{{ item }}"
+
+    - name: Add SAP-specific kernel parameters (transparent_hugepage=never and tsx=on)
+      when: is_hana
+      loop:
+        - transparent_hugepage=never
+        - tsx=on
+
+      command: grubby --args="{{ item }}" --update-kernel=ALL
+      loop_control:
+        label: "{{ item }}"
+
+    - name: Capture the final GRUB configuration after changes
+      command: grubby --info=DEFAULT
+      register: grubby_after
+      changed_when: false
+
+    - name: Save the final GRUB info to a temporary file
+      copy:
+        content: "{{ grubby_after.stdout }}"
+        dest: /tmp/grubby.after
+        mode: '0644'
+
+    - name: Compare the original and updated GRUB configurations
+      command: diff /tmp/grubby.orig /tmp/grubby.after
+      register: grubby_diff
+      changed_when: false
+      ignore_errors: true
+
+    - name: Show the difference in GRUB configurations
+      debug:
+        msg: "{{ grubby_diff.stdout }}"
+
+    - name: Backup the current GRUB configuration
+      copy:
+        src: /etc/default/grub
+        dest: /etc/default/grub.preAMI
+        backup: no
+        mode: '0644'
+
+    - name: Remove GRUB_TIMEOUT line if it exists
       lineinfile:
         path: /etc/default/grub
-        regexp: '^GRUB_CMDLINE_LINUX=.*$'
-        line: 'GRUB_CMDLINE_LINUX="{{ cleaned_line }} {{ additional_params }}"'
-        state: present
-      when: not backup_file.stat.exists
-      tags:
-        - exclude_grub_update
+        regexp: '^GRUB_TIMEOUT'
+        state: absent
+
+    - name: Add GRUB_TIMEOUT=15 to /etc/default/grub
+      lineinfile:
+        path: /etc/default/grub
+        line: 'GRUB_TIMEOUT=15'
+        create: yes
 
       notify:
         - update-grub
-        - dracut      
+        - dracut
 
-    - name: Adding sapsys in centrify group ignore, if it exists
-      shell: grep -c sapsys /etc/group && ! grep -c sapsys /etc/centrifydc/group.ignore && echo sapsys >> /etc/centrifydc/group.ignore
-      ignore_errors: yes
+    - name: Create group sapsys with GID 201
+      group:
+        name: sapsys
+        gid: 201
+        state: present
+
+    - name: Create group sapinst with GID 18288
+      group:
+        name: sapinst
+        gid: 18288
+        state: present
+
+    - name: Remove lines that do not contain 'saarthi' from authorized_keys
+      command: sed -i '/saarthi/!d' /root/.ssh/authorized_keys
+
+    - name: Remove any existing LS_COLORS definition from /root/.bash_profile
+      lineinfile:
+        path: /root/.bash_profile
+        regexp: '^LS_COLORS='
+        state: absent
+
+    - name: Add updated LS_COLORS definition to /root/.bash_profile
+      lineinfile:
+        path: /root/.bash_profile
+        line: 'LS_COLORS=$(echo $LS_COLORS | sed "s/34/35/") ; export LS_COLORS'
+        create: yes
+
+    - name: Reload /root/.bash_profile to apply color change
+      shell: ". /root/.bash_profile"
+      args:
+        executable: /bin/bash
+        creates: /root/.bash_profile
+
+    - name: Run subscription-manager to enable RHSM repo management
+      command: subscription-manager config --rhsm.manage_repos=1
+
+    - name: Disable all repositories and enable only rhel* repositories
+      command: subscription-manager repos --disable=* --enable=rhel*
+
+    - name: Remove 'sapsys' from /etc/centrifydc/group.ignore
+      lineinfile:
+        path: /etc/centrifydc/group.ignore
+        regexp: '^sapsys$'
+        state: absent
+
+    - name: Remove 'sapinst' from /etc/centrifydc/group.ignore
+      lineinfile:
+        path: /etc/centrifydc/group.ignore
+        regexp: '^sapinst$'
+        state: absent
+
+    - name: Add 'sapsys' to /etc/centrifydc/group.ignore
+      lineinfile:
+        path: /etc/centrifydc/group.ignore
+        line: 'sapsys'
+        state: present
+
+    - name: Add 'sapinst' to /etc/centrifydc/group.ignore
+      lineinfile:
+        path: /etc/centrifydc/group.ignore
+        line: 'sapinst'
+        state: present
+
 
     - name: Adding local user in centrify user ignore
       shell: "awk -F: '{print $1}' /etc/passwd > /etc/centrifydc/user.ignore && sleep 120 && adreload"
+
+    - name: Reload AD (adreload)
+      command:
+        cmd: adreload
+
 
     - name: Install Packages
       yum:
@@ -115,7 +291,7 @@
         - yum-utils
       ignore_errors: true
 
-    
+
     - name:  Set X11 forwarding to yes
       replace:
          path: /etc/ssh/sshd_config
@@ -166,7 +342,7 @@
 
     - name: Update file /etc/sysctl.d/zLilly.conf - # Lilly SAP settings for RHEL8/RHEL9
       blockinfile:
-         path: /etc/sysctl.d/zLilly.conf 
+         path: /etc/sysctl.d/zLilly.conf
          backup: yes
          block: |
           net.ipv4.tcp_syn_retries = 8
@@ -175,7 +351,7 @@
           net.ipv4.tcp_wmem = 4096 16384 6291456
           net.core.rmem_max = 6291456
           net.core.wmem_max = 6291456
-          kernel.sem = 32000 1024000000 500 3276
+          kernel.sem = 32000 1024000000 500 32768
 
 
 
@@ -184,8 +360,8 @@
     - name: update-grub
       command: "grub2-mkconfig -o /boot/grub2/grub.cfg"
     - name: dracut
-      command: dracut -f 
+      command: dracut -f
     - name: restart-rsyslogd
-      systemd: 
+      systemd:
        state: restarted
        name: rsyslog
