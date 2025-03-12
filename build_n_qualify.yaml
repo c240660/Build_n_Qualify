@@ -231,12 +231,6 @@
         line: 'LS_COLORS=$(echo $LS_COLORS | sed "s/34/35/") ; export LS_COLORS'
         create: yes
 
-    - name: Reload /root/.bash_profile to apply color change
-      shell: ". /root/.bash_profile"
-      args:
-        executable: /bin/bash
-        creates: /root/.bash_profile
-
     - name: Run subscription-manager to enable RHSM repo management
       command: subscription-manager config --rhsm.manage_repos=1
 
